@@ -12,8 +12,9 @@ const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASS;
 
 // ===== ADAFRUIT IO =====
-#define AIO_USERNAME "Hermes86"
-#define AIO_KEY "sua_chave"
+const char* aio_user = AIO_USERNAME;
+const char* aio_key = AIO_KEY;
+
 const char* mqtt_server = "io.adafruit.com";
 
 WiFiClient espClient;
@@ -39,30 +40,27 @@ float temperatura = 0;
 float umidade = 0;
 bool motorState = false;
 
-// ===== CONTROLE TEMP =====
-const float TEMP_ON = 24.0;
-const float TEMP_OFF = 22.5;
+// ===== SETPOINT =====
+float TEMP_ON = 24.0;
+float TEMP_OFF = 22.5;
 
-// ===== WIFI RECONNECT =====
-void reconnectWiFi() {
-  WiFi.disconnect(true);
-  delay(1000);
+// ================= WIFI =================
+void connectWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
 
   WiFi.begin(ssid, password);
-
-  Serial.print("Conectando WiFi");
+  Serial.print("WiFi");
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(300);
     Serial.print(".");
   }
 
-  Serial.println("\nWiFi conectado!");
-  Serial.print("IP: ");
+  Serial.println("\nWiFi OK");
   Serial.println(WiFi.localIP());
 }
 
-// ===== MOTOR =====
+// ================= MOTOR =================
 void setMotor(bool state) {
   motorState = state;
 
@@ -73,7 +71,7 @@ void setMotor(bool state) {
   }
 }
 
-// ===== WEB =====
+// ================= HTML =================
 String paginaHTML() {
   return R"rawliteral(
 <!DOCTYPE html>
@@ -84,20 +82,32 @@ String paginaHTML() {
 body {font-family:Arial;background:#111;color:white;text-align:center;}
 .card {background:#222;margin:10px;padding:15px;border-radius:12px;}
 .value {font-size:30px;color:#00ffcc;}
+button {padding:10px 20px;font-size:18px;}
 </style>
 </head>
 <body>
 
-<h2>ESP32 Monitor</h2>
+<h2>ESP32 Controle</h2>
 
 <div class="card">
 Temp: <div id="t" class="value">--</div>
 Hum: <div id="h" class="value">--</div>
 Motor: <div id="m" class="value">--</div>
-IP: <div id="ip" class="value">--</div>
+Setpoint: <div id="sp" class="value">--</div>
+</div>
+
+<div class="card">
+<input type="range" min="18" max="35" value="24" id="slider">
+<br><br>
+<button onclick="enviar()">Aplicar</button>
 </div>
 
 <script>
+function enviar() {
+  let v = document.getElementById("slider").value;
+  fetch("/set?temp=" + v);
+}
+
 setInterval(()=>{
 fetch('/data')
 .then(r=>r.json())
@@ -105,7 +115,7 @@ fetch('/data')
 t.innerHTML=d.temp+" C";
 h.innerHTML=d.hum+" %";
 m.innerHTML=d.motor;
-ip.innerHTML=d.ip;
+sp.innerHTML=d.set;
 });
 },1000);
 </script>
@@ -115,27 +125,63 @@ ip.innerHTML=d.ip;
 )rawliteral";
 }
 
-// ===== JSON =====
+// ================= JSON =================
 void handleData() {
   String json = "{";
   json += "\"temp\":" + String(temperatura) + ",";
   json += "\"hum\":" + String(umidade) + ",";
   json += "\"motor\":\"" + String(motorState ? "ON" : "OFF") + "\",";
+  json += "\"set\":" + String(TEMP_ON) + ",";
   json += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
   json += "}";
 
   server.send(200, "application/json", json);
 }
 
-// ===== MQTT =====
-void reconnect() {
-  if (!client.connected()) {
-    client.connect("ESP32Client", AIO_USERNAME, AIO_KEY);
+// ================= WEB =================
+void setupWeb() {
+
+  server.on("/", []() {
+    server.send(200, "text/html", paginaHTML());
+  });
+
+  server.on("/data", handleData);
+
+  server.on("/set", []() {
+
+    if (server.hasArg("temp")) {
+
+      float novo = server.arg("temp").toFloat();
+
+      TEMP_ON = novo;
+      TEMP_OFF = novo - 1.5;
+
+      Serial.print("SETPOINT WEB: ");
+      Serial.println(TEMP_ON);
+
+      server.send(200, "text/plain", "OK");
+    } else {
+      server.send(400, "text/plain", "ERRO");
+    }
+  });
+
+  server.begin();
+}
+
+// ================= MQTT =================
+void reconnectMQTT() {
+  if (client.connected()) return;
+
+  String clientId = "ESP32_" + String(random(1000,9999));
+
+  if (client.connect(clientId.c_str(), AIO_USERNAME, AIO_KEY)) {
+    Serial.println("MQTT OK");
   }
 }
 
-// ===== SETUP =====
+// ================= SETUP =================
 void setup() {
+
   Serial.begin(115200);
 
   pinMode(RELAY_PIN, OUTPUT);
@@ -153,53 +199,39 @@ void setup() {
 
   dht.begin();
 
-  reconnectWiFi();
+  connectWiFi();
+  setupWeb();
 
   client.setServer(mqtt_server, 1883);
-
-  server.on("/", []() {
-    server.send(200, "text/html", paginaHTML());
-  });
-
-  server.on("/data", handleData);
-  server.begin();
 }
 
-// ===== LOOP =====
+// ================= LOOP =================
 void loop() {
+
   server.handleClient();
+  connectWiFi();
 
-  // reconectar WiFi se cair
-  if (WiFi.status() != WL_CONNECTED) {
-    reconnectWiFi();
-  }
-
-  // MQTT
-  reconnect();
+  reconnectMQTT();
   client.loop();
 
-  // leitura sensor
   float t = dht.readTemperature();
   float h = dht.readHumidity();
 
   if (!isnan(t)) temperatura = t;
   if (!isnan(h)) umidade = h;
 
-  // controle motor
-  if (temperatura >= TEMP_ON && !motorState) {
-    setMotor(true);
+  // controle
+  if (temperatura >= TEMP_ON && !motorState) setMotor(true);
+  if (temperatura <= TEMP_OFF && motorState) setMotor(false);
+
+  // MQTT (monitoramento)
+  if (client.connected()) {
+    client.publish((String(AIO_USERNAME)+"/feeds/temperatura").c_str(),
+                   String(temperatura).c_str());
+
+    client.publish((String(AIO_USERNAME)+"/feeds/umidade").c_str(),
+                   String(umidade).c_str());
   }
-
-  if (temperatura <= TEMP_OFF && motorState) {
-    setMotor(false);
-  }
-
-  // MQTT monitoramento
-  client.publish((String(AIO_USERNAME)+"/feeds/temperatura").c_str(),
-                 String(temperatura).c_str());
-
-  client.publish((String(AIO_USERNAME)+"/feeds/umidade").c_str(),
-                 String(umidade).c_str());
 
   // OLED
   display.clearDisplay();
@@ -218,11 +250,14 @@ void loop() {
   display.print("Motor:");
   display.print(motorState ? "ON" : "OFF");
 
+  display.setCursor(0,30);
+  display.print("Set:");
+  display.print(TEMP_ON);
+
   display.setCursor(0,40);
-  display.print("IP:");
   display.print(WiFi.localIP());
 
   display.display();
 
-  delay(1200);
+  delay(1000);
 }
