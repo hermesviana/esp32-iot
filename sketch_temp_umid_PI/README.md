@@ -1,29 +1,32 @@
 # ESP32 IoT
 Projeto usando ESP32 para leitura de temperatura e umidade.
 
+## 👤 Autor:
+Hermes Viana
+
 ## componetes fisicos.
-- motor dc
+- motor dc 5 volts
 - modulo 2 reles 5v
 - protoboard 
 - display oled 0,96"
 - sensor de temperatura e umidade dht11
 - placa de desenvolvimento esp32 dev
-- cabo usb c e fios coloridos 
+- cabo usb/c e fios coloridos 
 
 Ligações básicas
 Componente	ESP32
-DHT	GPIO (ex: 4)
+DHT11	GPIO (ex: 4)
 OLED SDA	21
 OLED SCL	22
 Relé	GPIO (ex: 5)
-sensor dht11 pin 4
-- 
-
+Difusor de ar (opcional pin 18)
+ 
 ## Como usar
 1. Configure o arquivo steak.ino
 2. Envie o código para o ESP32
-3. Insira login e senha wifi e dopois usuario e chave de adafruit.oi
-4. Instale as bibliotecas abaixo 
+3. Insira login e senha wifi e dopois usuario e chave de conta adafruit.oi
+4. Instale as bibliotecas abaixo:
+
 #include <WiFi.h>
 #include <WebServer.h>
 #include <PubSubClient.h>
@@ -43,28 +46,55 @@ Funcionalidades
 
 Este projeto evoluiu de um sistema básico de leitura de sensores para um controlador de temperatura completo com interface web e arquitetura IoT organizada.
 
-🔧 Melhorias implementadas
-Implementação de controle automático de temperatura com histerese, evitando acionamentos instáveis do relé
-Criação de interface web em tempo real, permitindo monitoramento e ajuste do sistema via navegador
-Adição de controle de setpoint por slider, eliminando necessidade de comandos manuais por URL
-Integração com display OLED, exibindo temperatura, umidade, estado do sistema e setpoint
-Implementação de servidor web embarcado no ESP32 para comunicação local sem dependência externa
-Integração com MQTT (Adafruit IO) para envio de dados de monitoramento
-Separação de responsabilidades:
-🌐 Web → controle
-📡 MQTT → monitoramento
-🔐 Segurança e organização
-Remoção de credenciais do código principal.
+“Sistema IoT com controle remoto de setpoint via MQTT, automação de atuadores e monitoramento local e em nuvem.”
+
+🎯 O QUE MUDOU/corrigido (IMPORTANTE)
+
+✔️ OLED inicia antes de tudo
+✔️ Delay de estabilização I2C
+✔️ MQTT por último
+✔️ Reduzido impacto do WiFi
+✔️ OLED isolado no setup
+✔️ Delay maior pra estabilizar I2C
+✔️ Loop mais leve
+
+📱 Controlar temperatura, exemplo:
+
+Ver status e controle slider com botão aplicar:
+http://IP_DO_ESP32/
+
+🔥 VISÃO GERAL (O QUE ACONTECE)
+
+ESP32 virou basicamente um termostato com interface web.
+
+Ele faz 4 coisas ao mesmo tempo:
+
+🌡️ lê temperatura/umidade (DHT11)
+🌐 recebe setpoint pelo navegador
+⚙️ controla o relé automaticamente
+📡 envia dados pro Adafruit IO.
 
 🧠 Arquitetura atual
 
 O sistema opera de forma local e independente, com controle rápido e confiável:
 
-O usuário ajusta o setpoint via interface web
-O ESP32 processa a lógica de controle
-O relé é acionado automaticamente conforme a temperatura
-O OLED fornece feedback em tempo real
-O MQTT envia dados para monitoramento remoto
+📌 Melhorias do Projeto
+🔄 Substituição de delay() por millis(), deixando o sistema não bloqueante
+🌐 Interface web local com slider para ajuste do setpoint em tempo real
+🌡️ Controle automático de temperatura com histerese (liga/desliga estável)
+🔌 Controle de relé para acionamento de carga (ex: ventilação/aquecimento)
+☁ Integração com Adafruit IO via MQTT para monitoramento remoto
+📟 Display OLED com exibição de temperatura, umidade, setpoint e status
+🔁 Reconexão automática de WiFi e MQTT para maior estabilidade
+⚡ Execução simultânea de Web Server, sensores e IoT sem travamentos.
+
 🚀 Resultado
 
 O projeto se tornou um controlador de temperatura funcional com interface web, pronto para expansão e aplicação em cenários reais de automação.
+
+![Interface](imagens/interface_via_web_slider.png)
+
+![Funcionamento](imagens/controlador_de_temperatura.png)
+
+![AdafruitIO](imagens/dashboads_graficos.png)
+
