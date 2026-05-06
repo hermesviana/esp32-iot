@@ -1,4 +1,5 @@
 #include "secrets.h"
+
 #include <WiFi.h>
 #include <WebServer.h>
 #include <PubSubClient.h>
@@ -6,6 +7,8 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
 
 // ===== WIFI =====
 const char* ssid = WIFI_SSID;
@@ -14,28 +17,31 @@ const char* password = WIFI_PASS;
 // ===== ADAFRUIT IO =====
 const char* aio_user = AIO_USERNAME;
 const char* aio_key = AIO_KEY;
-
 const char* mqtt_server = "io.adafruit.com";
+
+// ===== TELEGRAM =====
+WiFiClientSecure secured_client;
+UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 WebServer server(80);
 
-// ================= DHT =================
+// ===== DHT =====
 #define DHTPIN 4
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
-// ================= OLED =================
+// ===== OLED =====
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// ================= RELÉ =================
+// ===== RELÉ =====
 #define RELAY_PIN 5
 #define RELAY_ACTIVE_LOW true
 
-// ================= VARIÁVEIS =================
+// ===== VARIÁVEIS =====
 float temperatura = 0;
 float umidade = 0;
 bool motorState = false;
@@ -43,48 +49,66 @@ bool motorState = false;
 float TEMP_ON = 24.0;
 float TEMP_OFF = 22.5;
 
-// ================= TIMERS =================
+String ipStr = "";
+
+// ===== TIMERS =====
 unsigned long lastSensor = 0;
 unsigned long lastMQTT = 0;
 unsigned long lastOLED = 0;
+unsigned long lastTelegram = 0;
 
-// ================= WIFI =================
+// ===== INTERVALOS =====
+const long sensorInterval = 2000;
+const long mqttInterval = 5000;
+const long oledInterval = 1000;
+const long telegramInterval = 30000;
+
+// ===== WIFI =====
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
 
   WiFi.begin(ssid, password);
 
-  while (WiFi.status() != WL_CONNECTED) {
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 5000) {
     delay(300);
     Serial.print(".");
   }
 
-  Serial.println("\nWiFi OK");
-  Serial.println(WiFi.localIP());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi OK");
+    ipStr = WiFi.localIP().toString();
+  } else {
+    Serial.println("\nOFFLINE");
+    ipStr = "";
+  }
 }
 
-// ================= RELÉ =================
+// ===== MQTT =====
+void reconnectMQTT() {
+  if (client.connected()) return;
+
+  String id = "ESP32_" + String(random(9999));
+
+  if (client.connect(id.c_str(), aio_user, aio_key)) {
+    Serial.println("MQTT OK");
+  }
+}
+
+// ===== RELÉ =====
 void setMotor(bool state) {
   motorState = state;
-
-  if (RELAY_ACTIVE_LOW)
-    digitalWrite(RELAY_PIN, state ? LOW : HIGH);
-  else
-    digitalWrite(RELAY_PIN, state ? HIGH : LOW);
+  digitalWrite(RELAY_PIN, (RELAY_ACTIVE_LOW ? !state : state));
 }
 
-// ================= WEB HTML =================
+// ===== WEB =====
 String pagina() {
-  String html = "<!DOCTYPE html><html><head>";
-  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-  html += "</head><body style='font-family:Arial;text-align:center;'>";
-
-  html += "<h2>ESP32 IoT Control</h2>";
-
-  html += "<p>Temp: " + String(temperatura) + "</p>";
-  html += "<p>Hum: " + String(umidade) + "</p>";
-  html += "<p>Motor: " + String(motorState ? "ON" : "OFF") + "</p>";
-  html += "<p>Setpoint: <span id='sp'>" + String(TEMP_ON) + "</span></p>";
+  String html = "<html><body style='text-align:center'>";
+  html += "<h2>ESP32 IoT</h2>";
+  html += "Temp: " + String(temperatura) + "<br>";
+  html += "Hum: " + String(umidade) + "<br>";
+  html += "Motor: " + String(motorState ? "ON" : "OFF") + "<br>";
+  html += "Set: <span id='sp'>" + String(TEMP_ON) + "</span><br>";
 
   html += "<input type='range' min='18' max='35' value='" + String(TEMP_ON) + "' oninput='send(this.value)'>";
 
@@ -92,7 +116,7 @@ String pagina() {
 <script>
 function send(v){
   document.getElementById('sp').innerHTML = v;
-  fetch('/set?temp=' + v);
+  fetch('/set?temp='+v);
 }
 setInterval(()=>{location.reload();},5000);
 </script>
@@ -102,7 +126,6 @@ setInterval(()=>{location.reload();},5000);
   return html;
 }
 
-// ================= WEB ROUTES =================
 void handleRoot() {
   server.send(200, "text/html", pagina());
 }
@@ -110,28 +133,13 @@ void handleRoot() {
 void handleSet() {
   if (server.hasArg("temp")) {
     float novo = server.arg("temp").toFloat();
-
     TEMP_ON = constrain(novo, 18, 35);
-    TEMP_OFF = TEMP_ON - 1.5;
-
-    Serial.println("SETPOINT WEB: " + String(TEMP_ON));
+    TEMP_OFF = TEMP_ON - 0.5;
   }
-
   server.send(200, "text/plain", "OK");
 }
 
-// ================= MQTT =================
-void reconnectMQTT() {
-  if (client.connected()) return;
-
-  String id = "ESP32_" + String(random(9999));
-
-  if (client.connect(id.c_str(), AIO_USERNAME, AIO_KEY)) {
-    Serial.println("MQTT OK");
-  }
-}
-
-// ================= SETUP =================
+// ===== SETUP =====
 void setup() {
   Serial.begin(115200);
 
@@ -141,31 +149,37 @@ void setup() {
   Wire.begin(21, 22);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("OLED falhou");
+    Serial.println("OLED FAIL");
     while (true);
   }
 
   dht.begin();
   connectWiFi();
 
+  secured_client.setInsecure();
+
   server.on("/", handleRoot);
   server.on("/set", handleSet);
   server.begin();
 
   client.setServer(mqtt_server, 1883);
+
+  bot.sendMessage(CHAT_ID, "ESP32 iniciou", "");
 }
 
-// ================= LOOP (SEM DELAY) =================
+// ===== LOOP =====
 void loop() {
 
   server.handleClient();
   connectWiFi();
 
-  reconnectMQTT();
-  client.loop();
+  if (WiFi.status() == WL_CONNECTED) {
+    reconnectMQTT();
+    client.loop();
+  }
 
-  // ================= SENSOR =================
-  if (millis() - lastSensor > 2000) {
+  // SENSOR
+  if (millis() - lastSensor > sensorInterval) {
     lastSensor = millis();
 
     float t = dht.readTemperature();
@@ -178,26 +192,21 @@ void loop() {
     if (temperatura <= TEMP_OFF && motorState) setMotor(false);
   }
 
-  // ================= MQTT =================
-  if (millis() - lastMQTT > 5000) {
+  // MQTT
+  if (millis() - lastMQTT > mqttInterval) {
     lastMQTT = millis();
 
     if (client.connected()) {
-      client.publish((String(AIO_USERNAME)+"/feeds/temperatura").c_str(),
-                     String(temperatura).c_str());
-
-      client.publish((String(AIO_USERNAME)+"/feeds/umidade").c_str(),
-                     String(umidade).c_str());
+      client.publish((String(aio_user)+"/feeds/temperatura").c_str(), String(temperatura).c_str());
+      client.publish((String(aio_user)+"/feeds/umidade").c_str(), String(umidade).c_str());
     }
   }
 
-  // ================= OLED =================
-  if (millis() - lastOLED > 1000) {
+  // OLED
+  if (millis() - lastOLED > oledInterval) {
     lastOLED = millis();
 
     display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(WHITE);
 
     display.setCursor(0,0);
     display.print("Temp: "); display.print(temperatura);
@@ -211,9 +220,37 @@ void loop() {
     display.setCursor(0,30);
     display.print("Set: "); display.print(TEMP_ON);
 
-    display.setCursor(0,40);
-    display.print(WiFi.localIP());
+    if (ipStr != "") {
+      display.setCursor(0,40);
+      display.print("IP: "); display.print(ipStr);
+    }
 
     display.display();
+  }
+
+  // TELEGRAM
+  if (WiFi.status() == WL_CONNECTED && millis() - lastTelegram > telegramInterval) {
+    lastTelegram = millis();
+
+    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+
+    while (numNewMessages) {
+      for (int i = 0; i < numNewMessages; i++) {
+
+        String text = bot.messages[i].text;
+        String chat_id = bot.messages[i].chat_id;
+
+        if (chat_id != CHAT_ID) continue;
+
+        if (text == "/status") {
+          bot.sendMessage(chat_id,
+            "Temp: " + String(temperatura) +
+            "\nHum: " + String(umidade) +
+            "\nSet: " + String(TEMP_ON),
+            "");
+        }
+      }
+      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    }
   }
 }
