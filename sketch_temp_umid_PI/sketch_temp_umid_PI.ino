@@ -27,9 +27,6 @@ WiFiClient espClient;
 PubSubClient client(espClient);
 WebServer server(80);
 
-WiFiClientSecure secured_client;
-UniversalTelegramBot bot(BOT_TOKEN, secured_client);
-
 // ===== DHT =====
 #define DHTPIN 4
 #define DHTTYPE DHT11
